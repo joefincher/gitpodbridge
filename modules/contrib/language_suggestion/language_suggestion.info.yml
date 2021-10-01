@@ -1,0 +1,11 @@
+name: Language Suggestion
+type: module
+description: Detects browser language, checks currently enabled translations and suggests to switch to the language.
+core: 8.x
+package: Multilingual
+core_version_requirement: ^8 || ^9
+
+# Information added by Drupal.org packaging script on 2021-05-28
+version: '8.x-1.0-rc9'
+project: 'language_suggestion'
+datestamp: 1622186309

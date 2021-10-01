@@ -1,0 +1,43 @@
+language_suggestion.mapping:
+  path: '/admin/config/regional/language-suggestion'
+  defaults:
+    _form: '\Drupal\language_suggestion\Form\LanguageSuggestionMappingForm'
+    _title: 'Language Suggestion'
+  requirements:
+    _permission: 'administer site configuration'
+  options:
+    _admin_route: TRUE
+
+language_suggestion.settings:
+  path: '/admin/config/regional/language-suggestion/settings'
+  defaults:
+    _form: '\Drupal\language_suggestion\Form\LanguageSuggestionSettingsForm'
+    _title: 'Settings'
+  requirements:
+    _permission: 'administer site configuration'
+  options:
+    _admin_route: TRUE
+
+language_suggestion.get_country_code:
+  path: '/language-suggestion/get-county-code'
+  defaults:
+    _controller: '\Drupal\language_suggestion\Controller\LanguageSuggestionController::getCountryCode'
+  methods:  [GET]
+  requirements:
+    _access: 'TRUE'
+
+language_suggestion.header_value:
+  path: '/language-suggestion/get-header-parameter'
+  defaults:
+    _controller: '\Drupal\language_suggestion\Controller\LanguageSuggestionController::getHTTPHeaderValue'
+  methods:  [GET]
+  requirements:
+    _access: 'TRUE'
+
+language_suggestion.negotiation_http_header:
+  path: '/admin/config/regional/language/detection/http-header'
+  defaults:
+    _form: '\Drupal\language_suggestion\Form\NegotiationHTTPHeaderForm'
+    _title: 'HTTP header language detection configuration'
+  requirements:
+    _permission: 'administer languages'

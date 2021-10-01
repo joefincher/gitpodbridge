@@ -1,0 +1,9 @@
+services:
+  drupalmoduleupgrader.commands:
+    class: \Drupal\drupalmoduleupgrader\Commands\DrupalmoduleupgraderCommands
+    arguments:
+      - '@renderer'
+      - '@plugin.manager.drupalmoduleupgrader.analyzer'
+      - '@plugin.manager.drupalmoduleupgrader.converter'
+    tags:
+      - { name: drush.command }

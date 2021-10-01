@@ -1,0 +1,284 @@
+<?php
+
+namespace Drupal\drupalmoduleupgrader\Commands;
+
+use Drush\Commands\DrushCommands;
+use Drupal\drupalmoduleupgrader\Report;
+use Drupal\drupalmoduleupgrader\Target;
+use Drupal\Core\Render\RendererInterface;
+use Drupal\Core\Plugin\DefaultPluginManager;
+use Symfony\Component\Filesystem\Filesystem;
+
+class DrupalmoduleupgraderCommands extends DrushCommands {
+
+  /**
+   * Renderer service.
+   *
+   * @var \Drupal\Core\Render\RendererInterface
+   */
+  protected $renderer;
+
+  /**
+   * Analyzer plugin manager.
+   *
+   * @var \Drupal\Core\Plugin\DefaultPluginManager
+   */
+  protected $analyzerPluginManager;
+
+  /**
+   * Converter plugin manager.
+   *
+   * @var \Drupal\Core\Plugin\DefaultPluginManager
+   */
+  protected $converterPluginManager;
+
+  /**
+   * DrupalmoduleupgraderCommands constructor.
+   *
+   * @param \Drupal\Core\Render\RendererInterface $renderer
+   *   Renderer service.
+   * @param \Drupal\Core\Plugin\DefaultPluginManager $analyzer_plugin_manager
+   *   Analyzer plugin manager.
+   * @param \Drupal\Core\Plugin\DefaultPluginManager $converter_plugin_manager
+   *   Converter plugin manager.
+   */
+  public function __construct(RendererInterface $renderer,
+                              DefaultPluginManager $analyzer_plugin_manager,
+                              DefaultPluginManager $converter_plugin_manager) {
+    parent::__construct();
+    $this->renderer = $renderer;
+    $this->analyzerPluginManager = $analyzer_plugin_manager;
+    $this->converterPluginManager = $converter_plugin_manager;
+
+  }
+
+  /**
+   * Lists available plugins.
+   *
+   * @param $plugin_type
+   *   The plugin type to query. Example:- indexer, analyzer, converter, cleaner.
+   * @param array $options
+   *   Options supported by the command.
+   *
+   * @command dmu:list
+   * @option only Comma seperated list of plugins that needs to filter.
+   * @option skip Comma seperated list of plugins that needs to skip.
+   * @aliases dmu-list
+   * @usage dmu:list indexer
+   *   Lists all indexer plugins.
+   *
+   * @return array
+   *   DMU plugin ids of a given type.
+   */
+  public function dmuList($plugin_type, array $options = ['only' => NULL, 'skip' => NULL]) {
+    return $this->dmuPluginList($plugin_type, $options);
+  }
+
+  /**
+   * Analyzes a Drupal 7 module and reports the changes needed to port it to Drupal 8 or Drupal 9.
+   *
+   * @param string $module
+   *   The machine name of a Drupal 7 module.
+   * @param array $options
+   *   Options supported by the command.
+   *
+   * @option only
+   *   A comma-separated list of analyzers to run, excluding all others.
+   * @option skip
+   *   A comma-separated list of analyzers to skip.
+   * @option path
+   *   Optional path to the target module.
+   * @option output
+   *   Optional path to output the report.
+   * @usage drush dmu-analyze pants
+   *   Analyze what needs to be changed in order to port the pants module.
+   *
+   * @command dmu:analyze
+   * @aliases dmu-analyze
+   */
+  public function analyze(string $module, array $options = ['only' => NULL, 'skip' => NULL, 'path' => NULL, 'output' => NULL]) {
+    $target = $this->dmuBuildTarget($module, $options['path']);
+
+    $total_issues = 0;
+    $report = new Report();
+
+    foreach ($this->dmuPluginList('analyzer', $options) as $id) {
+      $this->logger()->info('Executing plugin: @plugin_id', ['@plugin_id' => $id]);
+      $issues = $this->analyzerPluginManager->createInstance($id)->analyze($target);
+
+      if ($issues) {
+        if (!is_array($issues)) {
+          $issues = [$issues];
+        }
+
+        foreach ($issues as $issue) {
+          $report->addIssue($issue);
+        }
+
+        $total_issues += sizeof($issues);
+      }
+    }
+
+    if ($total_issues) {
+      $render = [
+        '#theme' => 'dmu_report',
+        '#report' => $report,
+      ];
+
+      if (isset($options['output'])) {
+        $destination = $options['output'];
+      }
+      else {
+        $destination = $target->getPath('upgrade-info.html');
+      }
+
+      $output = $this->renderer->renderRoot($render);
+      file_put_contents($destination, $output);
+      $this->logger()->info('Generated a report at @path', ['@path' => $destination], 'success');
+    }
+    else {
+      $this->logger()->info('Wow...no issues found! You get a cookie :)', 'success');
+    }
+  }
+
+  /**
+   * Upgrades a Drupal 7 module to Drupal 8 or Drupal 9.
+   *
+   * @param string $module
+   *   The machine name of a Drupal 7 module.
+   * @param array $options
+   *   An associative array of options whose values come from cli, aliases, config, etc.
+   * @option backup
+   *   If set, creates a backup copy of the module before conversion.
+   * @option only
+   *   A comma-separated list of converters to run, excluding all others.
+   * @option skip
+   *   A comma-separated list of converters to skip.
+   * @option path
+   *   Optional path to the target module. Will be determined automatically if omitted.
+   * @usage drush dmu-upgrade pants
+   *   Upgrade whatever can be automatically upgraded in the pants module.
+   *
+   * @command dmu:upgrade
+   * @aliases dmu-upgrade
+   */
+  public function upgrade(string $module, array $options = ['backup' => NULL, 'only' => NULL, 'skip' => NULL, 'path' => NULL]) {
+    $target = $this->dmuBuildTarget($module, $options['path']);
+    $module_path = $this->dmuGetDirectory($module);
+    if (is_null($module_path)) {
+      return;
+    }
+    if (file_exists($module_path . '/' . $module . '.info.yml')) {
+      $this->output()->writeln("You have already run dmu upgrade command for this module.");
+    }
+    if (isset($options['backup']) && $options['backup']) {
+      $fs = new Filesystem();
+      $backup_at = $target->getBasePath() . '.bak';
+      $fs->mirror($target->getBasePath(), $backup_at);
+      $this->logger()->info('Created backup at @path', ['@path' => $backup_at]);
+    }
+
+    foreach ($this->dmuPluginList('converter', $options) as $id) {
+      /** @var \Drupal\drupalmoduleupgrader\ConverterInterface $converter */
+      $converter = $this->converterPluginManager->createInstance($id);
+
+      if ($converter->isExecutable($target)) {
+        $this->logger()->info('Executing plugin: @plugin_id', ['@plugin_id' => $id]);
+        try {
+          $converter->convert($target);
+        }
+        catch (\Exception $e) {
+          $this->logger()->warning($e->getMessage(), 'error');
+          // Being a notice, the stack trace will only appear in verbose mode.
+          $this->logger()->warning($e->getTraceAsString(), 'notice');
+        }
+      }
+    }
+  }
+
+  /**
+   * Determines the path to a module.
+   *
+   * @param string $module
+   *   Module name.
+   *
+   * @return mixed|null
+   *   Module path if find or null.
+   */
+  protected function dmuGetDirectory(string $module) {
+    // Use Unix paths regardless of platform, skip dot directories, follow
+    // symlinks (to allow extensions to be linked from elsewhere), and return
+    // the RecursiveDirectoryIterator instance to have access to getSubPath(),
+    // since SplFileInfo does not support relative paths.
+    $flags = \FilesystemIterator::UNIX_PATHS;
+    $flags |= \FilesystemIterator::SKIP_DOTS;
+    $flags |= \FilesystemIterator::FOLLOW_SYMLINKS;
+    $flags |= \FilesystemIterator::CURRENT_AS_SELF;
+
+    $directory_iterator1 = new \RecursiveDirectoryIterator(DRUPAL_ROOT . '/modules', $flags);
+    $directory_iterator2 = new \RecursiveDirectoryIterator(DRUPAL_ROOT . '/sites', $flags);
+    $iterator = new \AppendIterator();
+    $iterator->append(new \RecursiveIteratorIterator($directory_iterator1));
+    $iterator->append(new \RecursiveIteratorIterator($directory_iterator2));
+
+    $path = NULL;
+
+    foreach ($iterator as $file) {
+      if ($file->getFileName() === $module . '.info') {
+        $path = rtrim(str_replace($module . '.info', '', $file->getPathName()), '/');
+      }
+    }
+
+    return $path;
+  }
+
+  /**
+   * Builds target module.
+   *
+   * @param string $module
+   *   Module name.
+   * @param null $path
+   *   Path of the module.
+   *
+   * @return \Drupal\drupalmoduleupgrader\Target
+   *   Target module.
+   */
+  protected function dmuBuildTarget(string $module, $path = NULL) {
+    $module_directory = $path ?? $this->dmuGetDirectory($module);
+    $target = new Target($module_directory, \Drupal::getContainer());
+    $this->output()->writeln('Indexing...');
+    $target->buildIndex();
+    $this->output()->writeln('done.');
+    return $target;
+  }
+
+  /**
+   * Returns a list of plugin IDs of a given type.
+   *
+   * Returns a list of plugin IDs of a given type filtered by the `--only` and
+   * `--skip` options.
+   *
+   * @param string $plugin_type
+   *   Plugin type.
+   * @param array $options
+   *   Options array.
+   *
+   * @return array
+   *   Array of plugin lists.
+   */
+  protected function dmuPluginList(string $plugin_type, array $options) {
+    // Instantiate the plugin manager and get all available plugin IDs.
+    $manager = \Drupal::service('plugin.manager.drupalmoduleupgrader.' . $plugin_type);
+    $plugin_IDs = array_keys($manager->getDefinitions());
+
+    if ($options['only']) {
+      $plugin_IDs = array_intersect($plugin_IDs, explode(',', $options['only']));
+    }
+    elseif ($options['skip']) {
+      $plugin_IDs = array_diff($plugin_IDs, explode(',', $options['skip']));
+    }
+
+    return $plugin_IDs;
+  }
+
+}

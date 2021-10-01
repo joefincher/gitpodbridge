@@ -1,0 +1,28 @@
+name: aathai14
+recipe: drupal9
+config:
+  webroot: .
+excludes:
+  - drush
+  - scripts
+  - vendor
+  - web/core
+  - web/modules/contrib
+  - web/profiles/contrib
+  - web/sites/default/files
+  - web/themes/contrib
+services:
+  d7db:
+    type: mariadb
+    creds:
+      user: drupal7db
+      password: drupal7db
+      database: drupal7db
+    portforward: true
+
+  myservice:
+    type: phpmyadmin:5.0
+    hosts: database
+
+  database:
+    type: mariadb
